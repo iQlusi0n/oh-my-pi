@@ -22,6 +22,10 @@
 - `omp init` creates a git repository in the current directory and a committed project-local session store at `.omp/sessions`, staged for the first commit.
 - Sessions are now discovered in the current directory's `.omp/sessions` store in addition to the usual global locations; once that store exists, new sessions started in that directory are written there so they travel with the repository.
 
+### Fixed
+
+- Compiled binaries start about 9x faster (~443 ms to ~48 ms): the build now keeps the CLI's lazy command imports as separate chunks instead of loading all 42 commands, the model catalog, and the docs index before any command runs.
+
 ## [18.1.14] - 2026-09-07
 
 ### Fixed

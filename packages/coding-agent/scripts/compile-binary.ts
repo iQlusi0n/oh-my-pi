@@ -50,6 +50,22 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				identifiers: options.minifyIdentifiers ?? false,
 				keepNames: true,
 			},
+			// Keep the CLI's lazy `import()` boundaries as separate bunfs chunks.
+			// Without splitting, Bun inlines every dynamic import into the entry
+			// bundle, so all 42 `cli-commands.ts` entries (plus the model catalog,
+			// compat rules, and docs index they pull in) evaluate before `--version`
+			// can answer: measured 443 ms -> 48 ms startup once chunked.
+			//
+			// `naming.chunk` must carry `[hash]`: several inputs derive the same
+			// chunk basename (`discovery/{gemini,github,opencode,windsurf}.ts`,
+			// `agent/src/compaction/entries.ts`) and the build fails with
+			// "Multiple files share the same output path" under the default naming.
+			splitting: true,
+			naming: {
+				entry: "[name].[ext]",
+				chunk: "[name]-[hash].[ext]",
+				asset: "[name]-[hash].[ext]",
+			},
 			plugins: [await createLegacyPiVirtualModulePlugin()],
 			compile: {
 				// Bun's process-wide fetch User-Agent default. Any explicit
