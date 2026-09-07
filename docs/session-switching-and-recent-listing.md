@@ -26,7 +26,9 @@ It focuses on current implementation behavior, including fallback paths and cave
 
 - `~/.omp/agent/sessions/<encoded-cwd>/*.jsonl`
 
-`<encoded-cwd>` is the path-encoded canonical cwd (`-<relative>` under home, `-tmp-<relative>` under the temp root, `--<encoded-absolute>--` otherwise; see [session.md](session.md#on-disk-layout)). Buckets from the reverted 17.2.5-17.2.8 hashed scheme are migrated best-effort. `SessionManager.list(cwd, sessionDir?)` reads only the resolved bucket unless an explicit `sessionDir` is provided.
+`<encoded-cwd>` is the path-encoded canonical cwd (`-<relative>` under home, `-tmp-<relative>` under the temp root, `--<encoded-absolute>--` otherwise; see [session.md](session.md#on-disk-layout)). Buckets from the reverted 17.2.5-17.2.8 hashed scheme are migrated best-effort.
+
+A project created with `omp init` also has an in-repo store at `<cwd>/.omp/sessions/project/*.jsonl`, which takes precedence as the write target for that directory. `SessionManager.list(cwd, sessionDir?)` reads every default bucket for the cwd (in-repo first, then global) and dedupes by path; an explicit `sessionDir` that is not one of those defaults is read verbatim, so SDK storages and `--session-dir` keep their exact scope.
 
 ### Two listing paths with different payloads
 

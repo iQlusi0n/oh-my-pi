@@ -1,9 +1,15 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { computeDefaultSessionDir } from "@oh-my-pi/pi-coding-agent/session/session-paths";
+import {
+	computeDefaultSessionDir,
+	defaultSessionDirForCwd,
+	isDefaultSessionDir,
+	sessionDirsForCwd,
+} from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { getConfigRootDir, getProjectSessionsDir, getSessionsDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
 const cleanup: string[] = [];
 
@@ -21,7 +27,20 @@ function legacySessionDir(sessionsRoot: string, cwd: string): string {
 	return path.join(sessionsRoot, name);
 }
 
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
+
+beforeEach(() => {
+	setAgentDir(path.join(makeTempDir("omp-session-agent-"), "agent"));
+});
+
 afterEach(() => {
+	if (originalAgentDir) {
+		setAgentDir(originalAgentDir);
+	} else {
+		setAgentDir(fallbackAgentDir);
+		delete process.env.PI_CODING_AGENT_DIR;
+	}
 	for (const dir of cleanup.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -63,5 +82,44 @@ describe("legacy session directory migration", () => {
 
 		expect(fs.readFileSync(recreated, "utf8")).toBe("older-process-write\n");
 		expect(fs.readFileSync(destination, "utf8")).toBe("canonical\n");
+	});
+});
+
+describe("project-local session store", () => {
+	test("routes new sessions into the repo only once the store exists", () => {
+		const cwd = makeTempDir("omp-session-cwd-");
+		const storage = new FileSessionStorage();
+
+		const globalDir = defaultSessionDirForCwd(cwd, storage);
+		expect(globalDir.startsWith(getSessionsDir())).toBe(true);
+		expect(sessionDirsForCwd(cwd, storage)).toEqual([globalDir]);
+
+		fs.mkdirSync(getProjectSessionsDir(cwd), { recursive: true });
+
+		const projectDir = defaultSessionDirForCwd(cwd, storage);
+		expect(projectDir).toBe(path.join(cwd, ".omp", "sessions", "project"));
+		// The global bucket stays in discovery order so pre-init sessions remain reachable.
+		expect(sessionDirsForCwd(cwd, storage)).toEqual([projectDir, globalDir]);
+	});
+
+	test("names the project bucket independently of the checkout path", () => {
+		const cwd = makeTempDir("omp-session-cwd-");
+		const clone = makeTempDir("omp-session-clone-");
+		const storage = new FileSessionStorage();
+
+		const original = computeDefaultSessionDir(cwd, storage, getProjectSessionsDir(cwd));
+		const relocated = computeDefaultSessionDir(clone, storage, getProjectSessionsDir(clone));
+
+		expect(path.relative(cwd, original)).toBe(path.relative(clone, relocated));
+	});
+
+	test("recognizes managed defaults and rejects caller-owned directories", () => {
+		const cwd = makeTempDir("omp-session-cwd-");
+		const storage = new FileSessionStorage();
+		fs.mkdirSync(getProjectSessionsDir(cwd), { recursive: true });
+
+		expect(isDefaultSessionDir(cwd, defaultSessionDirForCwd(cwd, storage))).toBe(true);
+		expect(isDefaultSessionDir(cwd, computeDefaultSessionDir(cwd, storage, getSessionsDir()))).toBe(true);
+		expect(isDefaultSessionDir(cwd, path.join(cwd, "custom-sessions"))).toBe(false);
 	});
 });

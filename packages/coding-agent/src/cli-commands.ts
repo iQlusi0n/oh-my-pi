@@ -123,6 +123,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.ifBenchHelp,
 	},
 	{
+		name: "init",
+		load: () => import("./commands/init").then(m => m.default),
+		help: commandHelp.initHelp,
+	},
+	{
 		name: "install",
 		load: () => import("./commands/install").then(m => m.default),
 		help: commandHelp.installHelp,

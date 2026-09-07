@@ -11,7 +11,7 @@ import {
 	type Usage,
 } from "@oh-my-pi/pi-ai";
 import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
-import { getSessionsDir, isEnoent, readLines } from "@oh-my-pi/pi-utils";
+import { getSessionsDir, isEnoent, readLines, resolveSessionsRootForPath } from "@oh-my-pi/pi-utils";
 import type {
 	AgentType,
 	MessageStats,
@@ -44,7 +44,8 @@ export function classifyAgentType(sessionPath: string): AgentType {
 	if (base === ADVISOR_TRANSCRIPT_BASENAME || (base.startsWith("__advisor.") && base.endsWith(".jsonl"))) {
 		return "advisor";
 	}
-	const rel = path.relative(getSessionsDir(), sessionPath);
+	const owner = resolveSessionsRootForPath(sessionPath);
+	const rel = path.relative(owner?.root ?? getSessionsDir(), sessionPath);
 	// `<project>/<file>.jsonl` -> 2 segments. Deeper nesting is a subagent.
 	return rel.split(path.sep).length <= 2 ? "main" : "subagent";
 }
@@ -55,8 +56,10 @@ export function classifyAgentType(sessionPath: string): AgentType {
  * The folder part uses -- as path separator.
  */
 export function extractFolderFromPath(sessionPath: string): string {
-	const sessionsDir = getSessionsDir();
-	const rel = path.relative(sessionsDir, sessionPath);
+	const owner = resolveSessionsRootForPath(sessionPath);
+	// A project-local root already names its project: the repository itself.
+	if (owner?.projectDir) return owner.projectDir;
+	const rel = path.relative(owner?.root ?? getSessionsDir(), sessionPath);
 	const projectDir = rel.split(path.sep)[0];
 	// Convert --work--pi-- to /work/pi
 	return projectDir.replace(/^--/, "/").replace(/--/g, "/");

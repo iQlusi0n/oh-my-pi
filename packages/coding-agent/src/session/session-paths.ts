@@ -2,7 +2,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getTerminalId } from "@oh-my-pi/pi-tui";
-import { getSessionsDir, getTerminalSessionsDir, isEnoent, logger, resolveEquivalentPath } from "@oh-my-pi/pi-utils";
+import {
+	getProjectSessionsDir,
+	getSessionsDir,
+	getTerminalSessionsDir,
+	isEnoent,
+	logger,
+	resolveEquivalentPath,
+} from "@oh-my-pi/pi-utils";
 import type { SessionStorage } from "./session-storage";
 
 const migratedSessionRoots = new Set<string>();
@@ -170,6 +177,10 @@ function migrateHashedSessionDir(hashedDirName: string, sessionDir: string, sess
 
 export function resolveManagedSessionRoot(sessionDir: string, cwd: string): string | undefined {
 	const currentDirName = path.basename(sessionDir);
+	// A project-local store is pinned to its repository, so a cwd change means a
+	// different project entirely: never carry the session into the new cwd's
+	// bucket inside the old repo.
+	if (isProjectSessionsRoot(cwd, path.dirname(sessionDir))) return undefined;
 	const { encodedDirName } = getDefaultSessionDirName(cwd);
 	if (currentDirName !== encodedDirName && currentDirName !== encodeLegacyAbsoluteSessionDirName(cwd)) {
 		return undefined;
@@ -187,6 +198,11 @@ export function computeDefaultSessionDir(
 	storage: SessionStorage,
 	sessionsRoot: string = getSessionsDir(),
 ): string {
+	if (isProjectSessionsRoot(cwd, sessionsRoot)) {
+		const sessionDir = path.join(sessionsRoot, PROJECT_SESSION_BUCKET);
+		storage.ensureDirSync(sessionDir);
+		return sessionDir;
+	}
 	const { encodedDirName, hashedDirName, resolvedCwd } = getDefaultSessionDirName(cwd);
 	migrateHomeSessionDirs(sessionsRoot);
 	const sessionDir = path.join(sessionsRoot, encodedDirName);
@@ -194,6 +210,97 @@ export function computeDefaultSessionDir(
 	migrateHashedSessionDir(hashedDirName, sessionDir, sessionsRoot);
 	storage.ensureDirSync(sessionDir);
 	return sessionDir;
+}
+
+// =============================================================================
+// Session roots: project-local (.omp/sessions) + global (~/.omp/agent/sessions)
+// =============================================================================
+
+/**
+ * Bucket directory inside a project-local sessions root.
+ *
+ * The global root keys its buckets by encoded cwd, but a project root is already
+ * scoped to one repository — and a path-derived name would break as soon as the
+ * repo is cloned elsewhere. A fixed name keeps committed sessions discoverable
+ * from any checkout while preserving the `<root>/<bucket>/<file>.jsonl` shape
+ * that session/stats consumers derive nesting depth from.
+ */
+export const PROJECT_SESSION_BUCKET = "project";
+
+/** Scope of a sessions root, in discovery order. */
+export type SessionRootScope = "project" | "global";
+
+export interface SessionRoot {
+	/** Absolute sessions root (contains per-project bucket directories). */
+	root: string;
+	scope: SessionRootScope;
+}
+
+export function isProjectSessionsRoot(cwd: string, sessionsRoot: string): boolean {
+	return path.resolve(sessionsRoot) === path.resolve(getProjectSessionsDir(path.resolve(cwd)));
+}
+
+/**
+ * True when `cwd` carries a project-local session store. Existence is the opt-in
+ * switch: without it omp behaves exactly as it did before project roots existed.
+ */
+export function hasProjectSessionStore(cwd: string, storage: SessionStorage): boolean {
+	return storage.existsSync(getProjectSessionsDir(path.resolve(cwd)));
+}
+
+/**
+ * Sessions roots to consult for `cwd`, most specific first. The project-local
+ * root is included only when it exists; the global root is always included so
+ * sessions recorded before `omp init` stay reachable.
+ */
+export function sessionRootsForCwd(cwd: string, storage: SessionStorage, agentDir?: string): SessionRoot[] {
+	const roots: SessionRoot[] = [];
+	if (hasProjectSessionStore(cwd, storage)) {
+		roots.push({ root: getProjectSessionsDir(path.resolve(cwd)), scope: "project" });
+	}
+	roots.push({ root: getSessionsDir(agentDir), scope: "global" });
+	return roots;
+}
+
+/**
+ * Directory new sessions for `cwd` are written to: the project-local store when
+ * present, else the global cwd-derived directory.
+ */
+export function defaultSessionDirForCwd(cwd: string, storage: SessionStorage, agentDir?: string): string {
+	const [primary] = sessionRootsForCwd(cwd, storage, agentDir);
+	return computeDefaultSessionDir(cwd, storage, primary!.root);
+}
+
+/**
+ * Every default session directory for `cwd`, in discovery order. Used by
+ * listings so sessions stored in the repo and sessions stored globally for the
+ * same cwd both show up.
+ */
+export function sessionDirsForCwd(cwd: string, storage: SessionStorage, agentDir?: string): string[] {
+	const dirs: string[] = [];
+	for (const { root } of sessionRootsForCwd(cwd, storage, agentDir)) {
+		const dir = computeDefaultSessionDir(cwd, storage, root);
+		if (!dirs.includes(dir)) dirs.push(dir);
+	}
+	return dirs;
+}
+
+/**
+ * True when `sessionDir` is one of the directories omp would pick for `cwd` on
+ * its own. Pure path math: callers use it to decide whether an explicitly passed
+ * session directory is a managed default (safe to widen to every root) or a
+ * caller-owned custom directory (must be honored verbatim).
+ */
+export function isDefaultSessionDir(cwd: string, sessionDir: string, agentDir?: string): boolean {
+	const resolved = path.resolve(sessionDir);
+	const resolvedCwd = path.resolve(cwd);
+	if (resolved === path.join(getProjectSessionsDir(resolvedCwd), PROJECT_SESSION_BUCKET)) return true;
+	const { encodedDirName } = getDefaultSessionDirName(resolvedCwd);
+	const globalRoot = getSessionsDir(agentDir);
+	return (
+		resolved === path.join(globalRoot, encodedDirName) ||
+		resolved === path.join(globalRoot, encodeLegacyAbsoluteSessionDirName(resolvedCwd))
+	);
 }
 
 // =============================================================================

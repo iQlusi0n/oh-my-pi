@@ -1004,6 +1004,52 @@ export function getProjectPromptsDir(cwd: string = getProjectDir()): string {
 	return path.join(getProjectAgentDir(cwd), "prompts");
 }
 
+/**
+ * Get the project-level sessions root (.omp/sessions).
+ *
+ * Unlike {@link getSessionsDir} this root is not profile- or XDG-aware: it is a
+ * committed, in-repo store, so it must resolve identically for every checkout
+ * of the same repository. It is opt-in — omp only reads and writes it when the
+ * directory already exists (`omp init` creates it).
+ */
+export function getProjectSessionsDir(cwd: string = getProjectDir()): string {
+	return path.join(getProjectAgentDir(cwd), "sessions");
+}
+
+/** Sessions root that owns a session path, as resolved by {@link resolveSessionsRootForPath}. */
+export interface OwningSessionsRoot {
+	/** Absolute sessions root containing per-project bucket directories. */
+	root: string;
+	/** Repository directory for a project-local root; `undefined` for the global root. */
+	projectDir?: string;
+}
+
+/**
+ * Recognize the sessions root that owns an absolute session path.
+ *
+ * Session consumers derive project identity and containment from
+ * `path.relative(root, sessionPath)`, so they need the root that actually owns
+ * the file: the global {@link getSessionsDir} tree, or a project-local
+ * `<repo>/.omp/sessions` tree discovered by walking up from the file. Returns
+ * `undefined` when the path belongs to neither.
+ */
+export function resolveSessionsRootForPath(sessionPath: string): OwningSessionsRoot | undefined {
+	const resolved = path.resolve(sessionPath);
+	const globalRoot = getSessionsDir();
+	if (pathIsWithin(globalRoot, resolved)) return { root: globalRoot };
+	// The in-repo marker is the committed `.omp` directory name, matching
+	// getProjectAgentDir — never the PI_CONFIG_DIR-overridable user-scope name.
+	for (let dir = path.dirname(resolved); ;) {
+		const configDir = path.dirname(dir);
+		if (path.basename(dir) === "sessions" && path.basename(configDir) === CONFIG_DIR_NAME) {
+			return { root: dir, projectDir: path.dirname(configDir) };
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) return undefined;
+		dir = parent;
+	}
+}
+
 /** Get the project-level plugin overrides path (.omp/plugin-overrides.json). */
 export function getProjectPluginOverridesPath(cwd: string = getProjectDir()): string {
 	return path.join(getProjectAgentDir(cwd), "plugin-overrides.json");

@@ -11,7 +11,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getSessionsDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getProjectSessionsDir, getSessionsDir, isEnoent, resolveSessionsRootForPath } from "@oh-my-pi/pi-utils";
 import { getSessionRollups, getToolCallCountsBySession } from "./db";
 import { extractFolderFromPath, parseAllSessionEntries } from "./parser";
 import type {
@@ -136,7 +136,8 @@ interface TrackScan {
 /** Resolve a client-supplied transcript path, enforcing sessions-root containment. */
 function resolveSessionPath(fileParam: string): string {
 	const resolved = path.resolve(fileParam);
-	const rel = path.relative(getSessionsDir(), resolved);
+	const owner = resolveSessionsRootForPath(resolved);
+	const rel = owner ? path.relative(owner.root, resolved) : "";
 	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
 		throw new TracePathError(`Path is outside the sessions directory: ${fileParam}`);
 	}
@@ -871,27 +872,38 @@ function basenameTimestamp(base: string): number | undefined {
  * importantly the currently running one).
  */
 async function scanDiskRoots(limit: number): Promise<Array<{ file: string; mtimeMs: number; startedAt: number }>> {
-	const sessionsDir = getSessionsDir();
+	const roots: Array<{ file: string; mtimeMs: number; startedAt: number }> = [];
+	// Both stores the dashboard can see from here: the global tree and the
+	// project-local `.omp/sessions` tree of the directory omp was launched in.
+	const sessionsRoots = [getSessionsDir(), getProjectSessionsDir()];
+	await Promise.all(sessionsRoots.map(sessionsRoot => scanDiskRoot(sessionsRoot, roots)));
+	roots.sort((a, b) => b.mtimeMs - a.mtimeMs);
+	return roots.slice(0, limit);
+}
+
+async function scanDiskRoot(
+	sessionsRoot: string,
+	roots: Array<{ file: string; mtimeMs: number; startedAt: number }>,
+): Promise<void> {
 	let projects: string[] = [];
 	try {
-		projects = await fs.readdir(sessionsDir);
+		projects = await fs.readdir(sessionsRoot);
 	} catch (err) {
-		if (isEnoent(err)) return [];
+		if (isEnoent(err)) return;
 		throw err;
 	}
-	const roots: Array<{ file: string; mtimeMs: number; startedAt: number }> = [];
 	await Promise.all(
 		projects.map(async project => {
 			let names: string[] = [];
 			try {
-				names = await fs.readdir(path.join(sessionsDir, project));
+				names = await fs.readdir(path.join(sessionsRoot, project));
 			} catch {
 				return; // Not a directory or unreadable — skip.
 			}
 			await Promise.all(
 				names.map(async name => {
 					if (!name.endsWith(".jsonl") && !name.endsWith(".jsonl.gz")) return;
-					const file = path.join(sessionsDir, project, name);
+					const file = path.join(sessionsRoot, project, name);
 					try {
 						const stat = await fs.stat(file);
 						roots.push({ file, mtimeMs: stat.mtimeMs, startedAt: basenameTimestamp(name) ?? stat.mtimeMs });
@@ -902,8 +914,6 @@ async function scanDiskRoots(limit: number): Promise<Array<{ file: string; mtime
 			);
 		}),
 	);
-	roots.sort((a, b) => b.mtimeMs - a.mtimeMs);
-	return roots.slice(0, limit);
 }
 
 /**
@@ -911,17 +921,18 @@ async function scanDiskRoots(limit: number): Promise<Array<{ file: string; mtime
  * transcript (subagents, advisors) into its root row.
  */
 export async function listSessionSummaries(limit = 100, q?: string): Promise<SessionSummary[]> {
-	const sessionsDir = getSessionsDir();
 	const toolCounts = getToolCallCountsBySession();
 	const byRoot = new Map<string, SummaryFold>();
 
 	for (const row of getSessionRollups()) {
-		const rel = path.relative(sessionsDir, row.sessionFile);
+		const owner = resolveSessionsRootForPath(row.sessionFile);
+		if (!owner) continue;
+		const rel = path.relative(owner.root, row.sessionFile);
 		if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
 		const segments = rel.split(path.sep);
 		if (segments.length < 2) continue;
 		const isChild = segments.length > 2;
-		const rootFile = isChild ? path.join(sessionsDir, segments[0], `${segments[1]}.jsonl`) : row.sessionFile;
+		const rootFile = isChild ? path.join(owner.root, segments[0], `${segments[1]}.jsonl`) : row.sessionFile;
 
 		let fold = byRoot.get(rootFile);
 		if (!fold) {

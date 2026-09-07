@@ -1,7 +1,7 @@
 import type { Terminal } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import { getRecentSessions } from "../session/session-listing";
-import { computeDefaultSessionDir } from "../session/session-paths";
+import { defaultSessionDirForCwd } from "../session/session-paths";
 import { FileSessionStorage } from "../session/session-storage";
 import type { LspServerInfo, RecentSession } from "./components/welcome";
 import { COMPOSER_DEFAULTS, Composer, type ComposerPreferences, type ComposerWelcomeUpdate } from "./composer";
@@ -191,7 +191,7 @@ async function refreshRecentSessions(
 
 async function loadRecentSessions(cwd: string): Promise<RecentSession[]> {
 	const storage = new FileSessionStorage();
-	const dir = computeDefaultSessionDir(cwd, storage);
+	const dir = defaultSessionDirForCwd(cwd, storage);
 	const list = await getRecentSessions(dir, 4, storage);
 	return list.map(session => ({ name: session.name, timeAgo: session.timeAgo }));
 }

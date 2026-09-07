@@ -12,7 +12,6 @@ import {
 	directoryIsEnterable,
 	getBlobsDir,
 	getProjectDir,
-	getSessionsDir,
 	isEnoent,
 	logger,
 	stringifyJson,
@@ -60,7 +59,7 @@ import {
 	type TtsrInjectionEntry,
 	type UsageStatistics,
 } from "./session-entries";
-import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
+import { findMostRecentSession, listAllSessions, listSessionsForCwd, type SessionInfo } from "./session-listing";
 import {
 	loadEntriesFromFile,
 	loadSessionFile,
@@ -71,6 +70,7 @@ import {
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
+	defaultSessionDirForCwd,
 	readTerminalBreadcrumbEntry,
 	resolveManagedSessionRoot,
 	writeTerminalBreadcrumb,
@@ -1551,7 +1551,7 @@ export class SessionManager {
 			resolvedTargetDir ??
 			(managedRoot
 				? computeDefaultSessionDir(resolvedCwd, this.#storage, managedRoot)
-				: computeDefaultSessionDir(resolvedCwd, this.#storage));
+				: defaultSessionDirForCwd(resolvedCwd, this.#storage));
 		const expectedSessionFile = this.#sessionFile
 			? path.join(nextSessionDir, path.basename(this.#sessionFile))
 			: undefined;
@@ -1964,7 +1964,7 @@ export class SessionManager {
 	 */
 	#reconcileSessionDirForFallback(): void {
 		if (this.#fallbackRuntimeOnly) {
-			this.#sessionDir = computeDefaultSessionDir(this.#cwd, this.#storage);
+			this.#sessionDir = defaultSessionDirForCwd(this.#cwd, this.#storage);
 			this.#fallbackRuntimeOnly = false;
 		}
 	}
@@ -2788,13 +2788,16 @@ export class SessionManager {
 		return newSessionFile;
 	}
 
-	/** Resolve the canonical default session directory for a cwd. */
+	/**
+	 * Resolve the canonical default session directory for a cwd: the project-local
+	 * `.omp/sessions` store when the project has one, else the global bucket.
+	 */
 	static getDefaultSessionDir(
 		cwd: string,
 		agentDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): string {
-		return computeDefaultSessionDir(cwd, storage, getSessionsDir(agentDir));
+		return defaultSessionDirForCwd(cwd, storage, agentDir);
 	}
 
 	/**
@@ -3118,8 +3121,7 @@ export class SessionManager {
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionInfo[]> {
-		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
-		const sessions = await listSessions(dir, storage);
+		const sessions = await listSessionsForCwd(cwd, storage, sessionDir);
 		return sortPinnedFirst(sessions, await loadPinnedSessionIds());
 	}
 

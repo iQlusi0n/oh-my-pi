@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getOverviewStats } from "@oh-my-pi/omp-stats/aggregator";
 import { getStatsByAgentType, initDb, insertMessageStats } from "@oh-my-pi/omp-stats/db";
-import { classifyAgentType } from "@oh-my-pi/omp-stats/parser";
+import { classifyAgentType, extractFolderFromPath } from "@oh-my-pi/omp-stats/parser";
 import type { AgentType, MessageStats } from "@oh-my-pi/omp-stats/types";
 import { getConfigRootDir, getSessionsDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
 import { installStatsTestIsolation } from "./helpers/temp-agent";
@@ -60,6 +60,17 @@ describe("classifyAgentType", () => {
 		expect(classifyAgentType(path.join(session, "AuthLoader", "__advisor.security.jsonl"))).toBe("advisor");
 		// `__advisor-2.jsonl` (output-manager bump namespace) is NOT an advisor transcript.
 		expect(classifyAgentType(path.join(session, "__advisor-2.jsonl"))).toBe("subagent");
+	});
+
+	it("classifies and attributes transcripts inside a project-local session store", () => {
+		const repo = "/work/demo";
+		const project = path.join(repo, ".omp", "sessions", "project");
+		const session = path.join(project, "1700000000000_abc");
+
+		expect(classifyAgentType(path.join(project, "1700000000000_abc.jsonl"))).toBe("main");
+		expect(classifyAgentType(path.join(session, "AuthLoader.jsonl"))).toBe("subagent");
+		// Folder attribution resolves to the repository, not the in-tree bucket name.
+		expect(extractFolderFromPath(path.join(project, "1700000000000_abc.jsonl"))).toBe(repo);
 	});
 });
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `getProjectSessionsDir` and `resolveSessionsRootForPath` for project-local (`.omp/sessions`) session stores.
+
 ## [18.1.13] - 2026-09-07
 
 ### Fixed

@@ -1,9 +1,9 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@oh-my-pi/pi-ai";
-import { getSessionsDir, logger, parseJsonlLenient, toError } from "@oh-my-pi/pi-utils";
+import { getProjectDir, logger, parseJsonlLenient, toError } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
-import { computeDefaultSessionDir } from "./session-paths";
+import { isDefaultSessionDir, sessionDirsForCwd, sessionRootsForCwd } from "./session-paths";
 import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
 import { lookupSessionTitle, recordSessionTitle } from "./title-index";
 
@@ -623,11 +623,44 @@ export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage
 	return scanSessionDirReadOnly(sessionDir, storage, true);
 }
 
-/** List all sessions across all project directories (newest first). */
+/**
+ * List sessions for a cwd across every default root (project-local store first,
+ * then the global store), newest first.
+ *
+ * `sessionDir` is honored verbatim when it is a caller-owned custom directory
+ * (SDK storages, `--session-dir`); when it is one of the directories omp would
+ * have chosen itself, the listing widens to all of them so in-repo and global
+ * sessions for the same project appear together.
+ */
+export async function listSessionsForCwd(
+	cwd: string,
+	storage: SessionStorage = new FileSessionStorage(),
+	sessionDir?: string,
+): Promise<SessionInfo[]> {
+	if (sessionDir && !isDefaultSessionDir(cwd, sessionDir)) {
+		return await listSessions(sessionDir, storage);
+	}
+	const dirs = sessionDirsForCwd(cwd, storage);
+	if (dirs.length === 1) return await listSessions(dirs[0]!, storage);
+	const perDir = await Promise.all(dirs.map(dir => listSessions(dir, storage)));
+	return dedupeSessionsByPath(perDir.flat());
+}
+
+/**
+ * List all sessions across all project directories (newest first). Scans every
+ * sessions root visible from `cwd` unless a single root is pinned explicitly.
+ */
 export async function listAllSessions(
 	storage: SessionStorage = new FileSessionStorage(),
-	sessionsRoot: string = getSessionsDir(),
+	sessionsRoot?: string,
+	cwd: string = getProjectDir(),
 ): Promise<SessionInfo[]> {
+	const roots = sessionsRoot ? [sessionsRoot] : sessionRootsForCwd(cwd, storage).map(entry => entry.root);
+	const perRoot = await Promise.all(roots.map(root => scanSessionsRoot(root, storage)));
+	return dedupeSessionsByPath(perRoot.flat());
+}
+
+async function scanSessionsRoot(sessionsRoot: string, storage: SessionStorage): Promise<SessionInfo[]> {
 	try {
 		const files = await Array.fromAsync(new Bun.Glob("*/*.jsonl").scan(sessionsRoot), name =>
 			path.join(sessionsRoot, name),
@@ -636,6 +669,20 @@ export async function listAllSessions(
 	} catch {
 		return [];
 	}
+}
+
+/**
+ * Collapse sessions reachable through more than one root (e.g. a global root
+ * nested inside a project checkout) and restore newest-first ordering, which
+ * per-root scans only guarantee within their own root.
+ */
+function dedupeSessionsByPath(sessions: SessionInfo[]): SessionInfo[] {
+	const byPath = new Map<string, SessionInfo>();
+	for (const session of sessions) {
+		const key = path.resolve(session.path);
+		if (!byPath.has(key)) byPath.set(key, session);
+	}
+	return [...byPath.values()].sort((left, right) => right.modified.getTime() - left.modified.getTime());
 }
 
 /** Exported for testing */
@@ -748,8 +795,7 @@ export async function resolveResumableSession(
 ): Promise<ResolvedSessionMatch | undefined> {
 	const storage = isSessionStorage(storageOrOptions) ? storageOrOptions : new FileSessionStorage();
 	const resolvedOptions = isSessionStorage(storageOrOptions) ? options : storageOrOptions;
-	const localSessionDir = sessionDir ?? computeDefaultSessionDir(cwd, storage);
-	const localSessions = await listSessions(localSessionDir, storage);
+	const localSessions = await listSessionsForCwd(cwd, storage, sessionDir);
 	const localMatch = localSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
 	if (localMatch) {
 		return { session: localMatch, scope: "local" };
@@ -759,7 +805,7 @@ export async function resolveResumableSession(
 		return undefined;
 	}
 
-	const globalSessions = await listAllSessions(storage);
+	const globalSessions = await listAllSessions(storage, undefined, cwd);
 	const globalMatch = globalSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
 	if (!globalMatch) {
 		return undefined;

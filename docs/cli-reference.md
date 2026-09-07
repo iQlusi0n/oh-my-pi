@@ -226,6 +226,7 @@ Run `omp <command> --help` for each command's own flags and examples.
 | `grievances` | View, clean, or push reported tool issues (auto-QA grievances). | |
 | `if-bench` | Benchmark instruction following and working memory: one cached thread of glyph array actions with a cat-sound directive that moves through the prompt. | |
 | `images`, `img` | Inspect, diagnose, probe, and purge image publication backends. | |
+| `init` | Create a git repository in the current directory and a committed project-local session store at `.omp/sessions`. | [session operations](./session-operations-export-share-fork-resume.md) |
 | `install` | Install or link an extension package (alias of `plugin install` / `plugin link`). | [extensions](./extensions.md) |
 | `join` | Join a shared collab session (same as `/join`). | [collab](./collab.md) |
 | `models` | List, search, and refresh available models. | [models](./models.md) |

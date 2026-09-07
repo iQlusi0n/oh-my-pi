@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Traces and per-project stats now include sessions stored in a project's in-repo `.omp/sessions` store, attributed to the repository directory.
+
 ## [18.1.3] - 2026-09-02
 
 ### Changed

@@ -68,6 +68,10 @@ export const imagesHelp = {
 	description: "Inspect, diagnose, probe, and purge image publication backends",
 } satisfies CommandMetadata;
 
+export const initHelp = {
+	description: "Create a git repository and a committed project-local session store",
+} satisfies CommandMetadata;
+
 export const installHelp = {
 	description: "Install or link an extension package (alias of `plugin install`/`plugin link`)",
 } satisfies CommandMetadata;

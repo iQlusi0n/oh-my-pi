@@ -42,6 +42,14 @@ Default file-session location:
 
 `<encoded-cwd>` is derived from the canonicalized cwd (so symlink aliases share a bucket): `-<relative>` for directories under home, `-tmp-<relative>` for directories under the temp root, and `--<encoded-absolute>--` for anything else, with path separators replaced by `-`.
 
+A directory may instead carry its own in-repo session store, created by [`omp init`](cli-reference.md):
+
+```text
+<project>/.omp/sessions/project/<timestamp>_<sessionId>.jsonl
+```
+
+The bucket name is the fixed string `project` rather than an encoded path, so a committed store stays discoverable from any checkout. While `<project>/.omp/sessions` exists it becomes the default write target for sessions started in that directory; the global bucket is still listed, so sessions recorded before `omp init` remain reachable. `resolveSessionsRootForPath` (in `@oh-my-pi/pi-utils`) maps a session path back to the root that owns it, which is how stats attributes and classifies transcripts from either store.
+
 On access, buckets written by the short-lived hashed scheme (`<scope>-<project-basename>-<sha256(canonical-cwd)>`, used in 17.2.5-17.2.8 and reverted in 17.2.9 by #7397) are migrated back into the path-encoded names best-effort, along with older `--<home-encoded>-*--` spellings of home-relative buckets.
 
 Blob store location:
