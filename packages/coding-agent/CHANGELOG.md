@@ -25,6 +25,7 @@
 ### Fixed
 
 - Compiled binaries start about 9x faster (~443 ms to ~48 ms): the build now keeps the CLI's lazy command imports as separate chunks instead of loading all 42 commands, the model catalog, and the docs index before any command runs.
+- `/move <dir>` now lands the session in that directory's `.omp/sessions` store when it has one, instead of leaving it in the global store.
 
 ## [18.1.14] - 2026-09-07
 

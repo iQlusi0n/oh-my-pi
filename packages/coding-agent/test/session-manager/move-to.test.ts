@@ -7,7 +7,7 @@ import type { SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-en
 import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { stripOuterDoubleQuotes } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
-import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getProjectSessionsDir, getSessionsDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
 // -- helpers ----------------------------------------------------------------
 
@@ -171,6 +171,36 @@ describe("SessionManager.moveTo", () => {
 		} finally {
 			access.mockRestore();
 		}
+	});
+
+	it("relocates into the destination's in-repo session store", async () => {
+		const session = SessionManager.create(cwdA);
+		session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+		session.appendMessage(makeAssistantMessage());
+		await session.flush();
+		const globalFile = session.getSessionFile()!;
+		expect(globalFile.startsWith(getSessionsDir())).toBe(true);
+
+		// `omp init` leaves this directory behind; from then on the project owns
+		// the sessions of anyone working there.
+		fs.mkdirSync(getProjectSessionsDir(cwdB), { recursive: true });
+		await session.moveTo(cwdB);
+
+		expect(session.getSessionFile()).toBe(path.join(cwdB, ".omp", "sessions", "project", path.basename(globalFile)));
+		expect(fs.existsSync(globalFile)).toBe(false);
+		const entries = await loadEntriesFromFile(session.getSessionFile()!);
+		expect(getHeader(entries)?.cwd).toBe(path.resolve(cwdB));
+		expect(hasAssistantEntry(entries)).toBe(true);
+	});
+
+	it("keeps a session in the global bucket when the destination has no store", async () => {
+		const session = SessionManager.create(cwdA);
+		session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+		await session.flush();
+
+		await session.moveTo(cwdB);
+
+		expect(session.getSessionFile()!.startsWith(getSessionsDir())).toBe(true);
 	});
 
 	it("succeeds on fresh session without ENOENT, then deferred persistence works", async () => {

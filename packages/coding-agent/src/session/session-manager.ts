@@ -12,6 +12,7 @@ import {
 	directoryIsEnterable,
 	getBlobsDir,
 	getProjectDir,
+	getSessionsDir,
 	isEnoent,
 	logger,
 	stringifyJson,
@@ -71,6 +72,7 @@ import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
 	defaultSessionDirForCwd,
+	hasProjectSessionStore,
 	readTerminalBreadcrumbEntry,
 	resolveManagedSessionRoot,
 	writeTerminalBreadcrumb,
@@ -1547,11 +1549,19 @@ export class SessionManager {
 		const resolvedCwd = path.resolve(newCwd);
 		const resolvedTargetDir = targetSessionDir ? path.resolve(targetSessionDir) : undefined;
 		const managedRoot = resolveManagedSessionRoot(this.#sessionDir, this.#cwd);
+		// A destination that carries its own in-repo session store owns the session
+		// once it arrives: `/move <dir>` means "this session belongs to that
+		// project", so following the old managed root would silently leave it
+		// outside the repository. Only the default global root defers this way — a
+		// caller-pinned root (SDK, `--agent-dir`) keeps its isolation, and an
+		// explicit `targetSessionDir` still wins over both.
+		const followsGlobalDefault =
+			managedRoot !== undefined && path.resolve(managedRoot) === path.resolve(getSessionsDir());
 		const nextSessionDir =
 			resolvedTargetDir ??
-			(managedRoot
-				? computeDefaultSessionDir(resolvedCwd, this.#storage, managedRoot)
-				: defaultSessionDirForCwd(resolvedCwd, this.#storage));
+			(managedRoot === undefined || (followsGlobalDefault && hasProjectSessionStore(resolvedCwd, this.#storage))
+				? defaultSessionDirForCwd(resolvedCwd, this.#storage)
+				: computeDefaultSessionDir(resolvedCwd, this.#storage, managedRoot));
 		const expectedSessionFile = this.#sessionFile
 			? path.join(nextSessionDir, path.basename(this.#sessionFile))
 			: undefined;
