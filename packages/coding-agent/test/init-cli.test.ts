@@ -51,6 +51,36 @@ describe("omp init", () => {
 		expect(result.sessionDir).toBe(path.join(nested, ".omp", "sessions", "project"));
 	});
 
+	it("refuses a bare repository instead of nesting a second repo inside it", async () => {
+		await Bun.spawn(["git", "init", "--bare", "-q"], { cwd, stdout: "ignore", stderr: "ignore" }).exited;
+
+		const result = await runInitCommand({ flags: { cwd } });
+
+		expect(result.repoCreated).toBe(false);
+		expect(result.errors.join(" ")).toContain("bare git repository");
+		expect(await Bun.file(path.join(cwd, ".git", "config")).exists()).toBe(false);
+		expect(await Bun.file(path.join(cwd, ".omp", "sessions", "project", ".gitignore")).exists()).toBe(false);
+	});
+
+	it("reports a missing directory instead of throwing out of the command", async () => {
+		const missing = path.join(tempDir, "not-here");
+
+		const result = await runInitCommand({ flags: { cwd: missing } });
+
+		expect(result.errors.join(" ")).toContain("not an enterable directory");
+		expect(result.sessionDir).toBe("");
+		expect(await Bun.file(path.join(missing, ".omp", "sessions", "project", ".gitignore")).exists()).toBe(false);
+	});
+
+	it("reports the store as created when only its parent directory pre-exists", async () => {
+		await fs.mkdir(path.join(cwd, ".omp", "sessions"), { recursive: true });
+
+		const result = await runInitCommand({ flags: { cwd } });
+
+		expect(result.sessionStoreCreated).toBe(true);
+		expect(await Bun.file(path.join(result.sessionDir, ".gitignore")).exists()).toBe(true);
+	});
+
 	it("reports an excluded store instead of silently leaving sessions untracked", async () => {
 		await Bun.spawn(["git", "init", "-q"], { cwd, stdout: "ignore", stderr: "ignore" }).exited;
 		await Bun.write(path.join(cwd, ".gitignore"), ".omp/\n");

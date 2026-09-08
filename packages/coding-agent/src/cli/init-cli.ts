@@ -11,9 +11,9 @@
 import * as path from "node:path";
 import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { $which, getProjectSessionsDir } from "@oh-my-pi/pi-utils";
+import { $which, directoryIsEnterableSync, getProjectSessionsDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
-import { computeDefaultSessionDir } from "../session/session-paths";
+import { computeDefaultSessionDir, PROJECT_SESSION_BUCKET } from "../session/session-paths";
 import { FileSessionStorage } from "../session/session-storage";
 
 /** Session-store backups are recovery scratch, never repository history. */
@@ -46,34 +46,45 @@ export interface InitResult {
 
 function renderText(result: InitResult): string {
 	const lines: string[] = [];
-	lines.push(
-		result.repoCreated
-			? `Initialized git repository at ${result.repoRoot ?? result.cwd}`
-			: `Using existing git repository at ${result.repoRoot ?? result.cwd}`,
-	);
-	lines.push(
-		result.sessionStoreCreated
-			? `Created project session store ${result.sessionDir}`
-			: `Project session store already present at ${result.sessionDir}`,
-	);
-	if (result.staged.length > 0) {
-		lines.push(`Staged ${result.staged.join(", ")}`);
-	}
-	if (result.ignored) {
+	if (result.repoRoot) {
 		lines.push(
-			`Warning: ${path.relative(result.repoRoot ?? result.cwd, result.sessionDir)} is excluded by a gitignore rule — sessions will not be committed until that rule is removed.`,
+			result.repoCreated
+				? `Initialized git repository at ${result.repoRoot}`
+				: `Using existing git repository at ${result.repoRoot}`,
 		);
 	}
-	lines.push(
-		result.ignored
-			? "Sessions started in this directory are stored there, but git will not track them."
-			: "Sessions started in this directory are now stored in the repository.",
-	);
+	if (result.sessionDir) {
+		lines.push(
+			result.sessionStoreCreated
+				? `Created project session store ${result.sessionDir}`
+				: `Project session store already present at ${result.sessionDir}`,
+		);
+		if (result.staged.length > 0) {
+			lines.push(`Staged ${result.staged.join(", ")}`);
+		}
+		if (result.ignored) {
+			lines.push(
+				`Warning: ${path.relative(result.repoRoot ?? result.cwd, result.sessionDir)} is excluded by a gitignore rule — sessions will not be committed until that rule is removed.`,
+			);
+		}
+		lines.push(
+			result.ignored
+				? "Sessions started in this directory are stored there, but git will not track them."
+				: "Sessions started in this directory are now stored in the repository.",
+		);
+	}
 	for (const error of result.errors) lines.push(`Error: ${error}`);
 	return `${lines.join("\n")}\n`;
 }
 
-/** Create the repository when `cwd` is not already inside one. */
+/**
+ * Create the repository when `cwd` is not already inside one.
+ *
+ * A bare repository is refused rather than initialized: `vcs.git` does not
+ * report one (there is no `.git` directory to discover), so falling through to
+ * `git init` would nest a second, non-bare repository inside it. A bare repo has
+ * no working tree to hold a session store either.
+ */
 async function ensureGitRepo(cwd: string, result: InitResult): Promise<VcsGitRepo | null> {
 	const existing = vcs.git(cwd);
 	if (existing) {
@@ -82,6 +93,11 @@ async function ensureGitRepo(cwd: string, result: InitResult): Promise<VcsGitRep
 	}
 	if (!$which("git")) {
 		result.errors.push("git is not installed or not on PATH; cannot create a repository.");
+		return null;
+	}
+	const bare = await $`git rev-parse --is-bare-repository`.cwd(cwd).quiet().nothrow();
+	if (bare.exitCode === 0 && bare.stdout.toString().trim() === "true") {
+		result.errors.push(`${cwd} is a bare git repository; run omp init inside a working tree instead.`);
 		return null;
 	}
 	const init = await $`git init`.cwd(cwd).quiet().nothrow();
@@ -134,17 +150,30 @@ export async function runInitCommand(args: InitCommandArgs): Promise<InitResult>
 		cwd,
 		repoCreated: false,
 		sessionDir: "",
-		sessionStoreCreated: !storage.existsSync(sessionsRoot),
+		// The store is the bucket, not its parent: `.omp/sessions` can exist with
+		// no bucket inside it, and this run is what creates the bucket.
+		sessionStoreCreated: !storage.existsSync(path.join(sessionsRoot, PROJECT_SESSION_BUCKET)),
 		staged: [],
 		ignored: false,
 		errors: [],
 	};
 
+	if (!directoryIsEnterableSync(cwd)) {
+		// Bun's shell throws on an unspawnable cwd rather than reporting an exit
+		// code, so the directory is checked before any git invocation to keep the
+		// failure inside `errors` (and inside `--json` output).
+		result.errors.push(`${cwd} is not an enterable directory.`);
+		process.stdout.write(args.flags.json ? `${JSON.stringify(result, null, 2)}\n` : renderText(result));
+		return result;
+	}
+
 	const repo = await ensureGitRepo(cwd, result);
-	// Resolve through the runtime path so the created directory is exactly the
-	// one sessions started here will be written to.
-	result.sessionDir = computeDefaultSessionDir(cwd, storage, sessionsRoot);
+	// Nothing is created on a failed run: a command that reports an error must
+	// not leave a half-initialized store behind.
 	if (repo && result.repoRoot) {
+		// Resolve through the runtime path so the created directory is exactly the
+		// one sessions started here will be written to.
+		result.sessionDir = computeDefaultSessionDir(cwd, storage, sessionsRoot);
 		await stageSessionStore(repo, result.repoRoot, result.sessionDir, result);
 	}
 
