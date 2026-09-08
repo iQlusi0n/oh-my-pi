@@ -6,6 +6,9 @@
 
 - Added `advisor.maxNotesPerUpdate` setting and `WATCHDOG.yml` configuration (default `4`): allows reasoning verifiers to batch findings in a single review update without being rate-limited.
 - Headless browser tabs now freeze when a turn settles so idle animated/WebGL pages stop burning CPU/GPU, resuming automatically on next use; tabs idle past `browser.idleCloseSec` (default 30 minutes) are closed. `persist: true` on `browser.open` opts a tab out of both ([#8246](https://github.com/can1357/oh-my-pi/issues/8246) by [@H4vC](https://github.com/H4vC)).
+- `omp init` creates a git repository in the current directory and a committed project-local session store at `.omp/sessions`, staged for the first commit.
+- Sessions are now discovered in the current directory's `.omp/sessions` store in addition to the usual global locations; once that store exists, new sessions started in that directory are written there so they travel with the repository.
+- `SessionManager.list`/`listAll` accept an `agentDir`, so an embedder that keeps its own agent directory lists only that directory's sessions.
 
 ### Fixed
 
@@ -15,16 +18,8 @@
 - Advisor notes now report rate limiting accurately, blockers always interrupt even after a lower-severity note in the same update, and deferred notes flush when the primary run completes, including after advisor quota exhaustion ([#11062](https://github.com/can1357/oh-my-pi/issues/11062)).
 - Fixed the built-in clangd registration omitting CUDA source and header files (`.cu` and `.cuh`) ([#10782](https://github.com/can1357/oh-my-pi/pull/10782) by [@alphastorm](https://github.com/alphastorm)).
 - Fixed `ast_grep` skipping CUDA headers and ignoring an explicit `lang` override for ambiguous file extensions ([#10782](https://github.com/can1357/oh-my-pi/pull/10782) by [@alphastorm](https://github.com/alphastorm)).
-### Fixed
-
 - Python cells are no longer replayed automatically after a kernel crash, preventing duplicate side effects; the next call starts a fresh kernel.
 - Session rewrites preserve open-reader snapshots and replacement identity when a rename needs an EPERM fallback.
-- `omp init` creates a git repository in the current directory and a committed project-local session store at `.omp/sessions`, staged for the first commit.
-- Sessions are now discovered in the current directory's `.omp/sessions` store in addition to the usual global locations; once that store exists, new sessions started in that directory are written there so they travel with the repository.
-- `SessionManager.list`/`listAll` accept an `agentDir`, so an embedder that keeps its own agent directory lists only that directory's sessions.
-
-### Fixed
-
 - Compiled binaries start about 9x faster (~443 ms to ~48 ms): the build now keeps the CLI's lazy command imports as separate chunks instead of loading all 42 commands, the model catalog, and the docs index before any command runs.
 - `/move <dir>` now lands the session in that directory's `.omp/sessions` store when it has one, instead of leaving it in the global store.
 
