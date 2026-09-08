@@ -131,4 +131,6 @@ RUN set -eux; \
 ############################
 FROM scratch AS export
 
-COPY --from=binary-builder /out/omp /omp
+# `--chmod` pins the mode rather than trusting mode preservation through the
+# scratch stage and the local exporter.
+COPY --chmod=0755 --from=binary-builder /out/omp /omp
