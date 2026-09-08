@@ -8,6 +8,8 @@ packages/*/dist/
 packages/*/dist-chrome/
 packages/*/dist-firefox/
 target/
+# `docker build -f Dockerfile.binary --output type=local,dest=out .` (docs/ompx.md)
+out/
 .xwin-cache/
 *.tsbuildinfo
 *.node

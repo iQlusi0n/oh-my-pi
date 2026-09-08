@@ -1,0 +1,134 @@
+# syntax=docker/dockerfile:1.7-labs
+###############################################################################
+# oh-my-pi — standalone binary builder
+#
+# Produces the single-file `omp` executable (what `packages/coding-agent`'s
+# `bun run build` emits) in a hermetic image, compiling the Rust addon from
+# source instead of reusing a prebuilt `.node` from a host cache.
+#
+# The root `Dockerfile` deliberately does NOT do this: it builds the native
+# addon and then ships an `omp` shim that runs the TypeScript entrypoint through
+# Bun. Use that one for a runnable container; use this one when you want the
+# artifact.
+#
+# Stages:
+#   natives-builder — Rust + Bun -> pi_natives.linux-<arch>.node
+#   binary-builder  — generated assets + Bun.build --compile -> dist/omp
+#   export          — scratch image carrying only the binary   (DEFAULT)
+#
+# Build (writes ./out/omp on the host):
+#     docker build -f Dockerfile.binary --output type=local,dest=out .
+#
+# Keep the binary in an image instead (e.g. to docker cp it later):
+#     docker build -f Dockerfile.binary --target binary-builder -t omp-binary:dev .
+#
+# Cross-compile by passing Bun's target through CROSS_TARGET, which
+# `scripts/build-binary.ts` maps to a Bun compile target. The addon is still
+# built for the image's own platform, so only same-platform values are useful
+# here (`linux-x64`, `linux-arm64` under an emulated/native arm64 builder):
+#     docker build -f Dockerfile.binary --build-arg CROSS_TARGET=linux-x64 \
+#       --output type=local,dest=out .
+###############################################################################
+
+ARG BUN_VERSION=1.4.0
+
+############################
+# 1) natives-builder — Rust + Bun -> pi_natives.linux-<arch>.node (local cargo)
+#
+# Mirrors the root Dockerfile's stage of the same name: one fixed host target,
+# so the default cargo/napi-rs backend beats Bazel's hermetic cross toolchains
+# (no bazelisk download, no analysis phase per build). `ci` profile = release
+# codegen, thin LTO, stripped.
+############################
+FROM rust:1.86-slim-bookworm AS natives-builder
+
+ARG BUN_VERSION
+
+ENV BUN_INSTALL=/opt/bun \
+    PATH=/opt/bun/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin \
+    CARGO_TERM_COLOR=never \
+    OMP_NATIVE_CARGO_PROFILE=ci
+
+# clang/libclang-dev: bindgen for pipewire-sys/libspa-sys (Linux desktop
+# capture); cmake/make/ninja-build: audiopus_sys builds bundled libopus.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        curl ca-certificates pkg-config libssl-dev unzip git \
+        clang libclang-dev cmake make ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
+    && /opt/bun/bin/bun --version
+
+WORKDIR /pi
+
+# Layer 0 — pinned nightly toolchain, isolated so source edits never re-download
+# rustup components.
+COPY rust-toolchain.toml /pi/
+RUN rustup show
+
+# Layer 1 — manifests + lockfiles only, so source edits don't bust `bun install`.
+COPY --parents \
+    package.json bun.lock bunfig.toml \
+    patches/*.patch \
+    tsconfig.base.json tsconfig.json \
+    Cargo.toml Cargo.lock rust-toolchain.toml \
+    packages/*/package.json \
+    packages/tsconfig.workspace.json \
+    python/robomp/web/package.json \
+    crates/*/Cargo.toml \
+    /pi/
+
+RUN bun install --frozen-lockfile --ignore-scripts
+
+# Layer 2 — full source. `Dockerfile.binary.dockerignore` keeps target/,
+# node_modules/, dist/ and every host-built `*.node` out of the context.
+COPY . /pi/
+
+# Layer 3 — compile the N-API addon. Persistent caches keep rebuilds
+# incremental (CARGO_HOME is /usr/local/cargo in the rust image).
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/pi/target \
+    set -eux; \
+    bun --cwd=packages/natives run build; \
+    ls -la packages/natives/native/pi_natives.linux-*.node
+
+############################
+# 2) binary-builder — generated assets + Bun.build --compile
+#
+# `bun --cwd=packages/coding-agent run build` runs the same script a developer
+# runs: gen:stats (Tailwind/React stats client) -> gen:tool-views ->
+# embed-native (tars the addon built above into the bundle) -> Bun.build with
+# `compile`, then resets the checked-in generated placeholders.
+#
+# Bun.build uses the running executable as the standalone runtime template, and
+# here that is the real `bun` from Layer 0 — never an already-compiled app, so
+# the output cannot inherit another binary's payload and boot as bun.
+############################
+FROM natives-builder AS binary-builder
+
+ARG CROSS_TARGET=""
+ENV CROSS_TARGET=${CROSS_TARGET}
+
+RUN set -eux; \
+    bun --cwd=packages/coding-agent run build; \
+    binary="$(ls packages/coding-agent/dist/omp*)"; \
+    test -x "$binary"; \
+    if [ -z "${CROSS_TARGET}" ]; then \
+        # Fail loudly if the compile produced a bare Bun runtime instead of the
+        # app: `--version` prints `omp/<version>` for a real build and a bare
+        # semver for a mis-templated one. Cross builds skip both checks because
+        # a foreign-platform binary cannot run here.
+        "$binary" --version | grep -q '^omp/'; \
+        "$binary" --smoke-test; \
+    fi; \
+    mkdir -p /out; \
+    cp "$binary" /out/omp
+
+############################
+# 3) export — scratch image holding only the artifact (DEFAULT)
+############################
+FROM scratch AS export
+
+COPY --from=binary-builder /out/omp /omp

@@ -590,6 +590,11 @@ Key ideas:
 
 ## Development
 
+> **This fork ships as `ompx`.** The launcher, the `bun run build` recipe for the
+> standalone binary, and the hermetic `Dockerfile.binary` build are documented in
+> [docs/ompx.md](docs/ompx.md). Nothing in the tree is renamed — the code, its
+> config directory, and its environment prefixes are still `omp`/`.omp`.
+
 ### Getting started from source
 
 Fresh clones need both workspace dependencies and the local Rust/N-API addon before the source CLI can start.

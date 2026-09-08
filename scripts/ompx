@@ -1,0 +1,72 @@
+#!/bin/sh
+# ompx — this fork's launcher. See docs/ompx.md.
+#
+# Level 0 by design: only the command name differs. State lives in the shared
+# `~/.omp` (credentials, models.db, global sessions, blobs), so an upstream
+# `omp` install and this fork coexist without a re-login, and nothing in the
+# tree is renamed — a rename would conflict on every upstream merge and would
+# orphan the project-local `.omp/sessions` stores.
+#
+# Install by symlinking onto PATH; the script locates its own checkout, so the
+# same symlink works from any clone:
+#
+#     ln -sfn "$PWD/scripts/ompx" ~/.local/bin/ompx
+#
+# Overrides:
+#   OMPX_REPO=/path/to/oh-my-pi   run a different checkout
+#   OMPX_FROM_SOURCE=1            ignore dist/omp and run the TypeScript entry
+set -e
+
+# Resolve this script through any symlink chain to find the checkout it lives
+# in. `readlink -f` covers GNU/BusyBox; the loop is the portable fallback for
+# macOS, whose readlink has no -f.
+resolve_self() {
+	if readlink -f "$1" 2>/dev/null; then
+		return
+	fi
+	target="$1"
+	while [ -L "$target" ]; do
+		link=$(readlink "$target")
+		case $link in
+		/*) target=$link ;;
+		*) target=$(dirname "$target")/$link ;;
+		esac
+	done
+	printf '%s\n' "$target"
+}
+
+if [ -n "${OMPX_REPO:-}" ]; then
+	repo="$OMPX_REPO"
+else
+	self=$(resolve_self "$0")
+	repo=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd)
+fi
+
+binary="$repo/packages/coding-agent/dist/omp"
+entry="$repo/packages/coding-agent/src/cli.ts"
+
+# Usage attribution only: separates this fork from an upstream install in
+# broker-side per-client burn tracking without splitting any state.
+export OMP_APP_NAME="${OMP_APP_NAME:-ompx}"
+
+if [ -x "$binary" ] && [ "${OMPX_FROM_SOURCE:-0}" != "1" ]; then
+	exec "$binary" "$@"
+fi
+
+if [ ! -f "$entry" ]; then
+	echo "ompx: no omp checkout at $repo (set OMPX_REPO)" >&2
+	exit 1
+fi
+
+if command -v bun >/dev/null 2>&1; then
+	exec bun run "$entry" "$@"
+fi
+
+# No Bun on PATH: borrow the runtime embedded in an installed omp binary.
+# BUN_BE_BUN makes a compiled Bun executable behave as the bun CLI.
+if command -v omp >/dev/null 2>&1; then
+	BUN_BE_BUN=1 exec omp run "$entry" "$@"
+fi
+
+echo "ompx: needs a built binary, bun on PATH, or an installed omp binary" >&2
+exit 1
