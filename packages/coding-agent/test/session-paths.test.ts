@@ -5,8 +5,9 @@ import * as path from "node:path";
 import {
 	computeDefaultSessionDir,
 	defaultSessionDirForCwd,
-	isDefaultSessionDir,
+	hasProjectSessionStore,
 	sessionDirsForCwd,
+	sessionDirsForListing,
 } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { getConfigRootDir, getProjectSessionsDir, getSessionsDir, setAgentDir } from "@oh-my-pi/pi-utils";
@@ -113,13 +114,45 @@ describe("project-local session store", () => {
 		expect(path.relative(cwd, original)).toBe(path.relative(clone, relocated));
 	});
 
-	test("recognizes managed defaults and rejects caller-owned directories", () => {
+	test("pairs a pinned directory with one sibling root and never invents another", () => {
 		const cwd = makeTempDir("omp-session-cwd-");
 		const storage = new FileSessionStorage();
+		const globalDir = computeDefaultSessionDir(cwd, storage, getSessionsDir());
 		fs.mkdirSync(getProjectSessionsDir(cwd), { recursive: true });
+		const projectDir = path.join(cwd, ".omp", "sessions", "project");
 
-		expect(isDefaultSessionDir(cwd, defaultSessionDirForCwd(cwd, storage))).toBe(true);
-		expect(isDefaultSessionDir(cwd, computeDefaultSessionDir(cwd, storage, getSessionsDir()))).toBe(true);
-		expect(isDefaultSessionDir(cwd, path.join(cwd, "custom-sessions"))).toBe(false);
+		// A pinned global bucket gains the in-repo store, and vice versa.
+		expect(sessionDirsForListing(cwd, storage, globalDir)).toEqual([globalDir, projectDir]);
+		expect(sessionDirsForListing(cwd, storage, projectDir)).toEqual([projectDir, globalDir]);
+		// A caller-owned directory is scanned alone.
+		expect(sessionDirsForListing(cwd, storage, path.join(cwd, "custom-sessions"))).toEqual([
+			path.join(cwd, "custom-sessions"),
+		]);
+	});
+
+	test("scopes the sibling global bucket to the caller's agent dir", () => {
+		const cwd = makeTempDir("omp-session-cwd-");
+		const tenantAgentDir = makeTempDir("omp-session-tenant-");
+		const storage = new FileSessionStorage();
+		fs.mkdirSync(getProjectSessionsDir(cwd), { recursive: true });
+		const projectDir = path.join(cwd, ".omp", "sessions", "project");
+
+		const dirs = sessionDirsForListing(cwd, storage, projectDir, tenantAgentDir);
+
+		// The tenant's own bucket, never the process-default one.
+		expect(dirs[0]).toBe(projectDir);
+		expect(dirs[1]!.startsWith(getSessionsDir(tenantAgentDir))).toBe(true);
+		expect(dirs.some(dir => dir.startsWith(getSessionsDir()))).toBe(false);
+	});
+
+	test("recognizes an existing store when the cwd is reached through a symlink", () => {
+		const real = makeTempDir("omp-session-real-");
+		const link = path.join(makeTempDir("omp-session-link-"), "checkout");
+		const storage = new FileSessionStorage();
+		fs.mkdirSync(getProjectSessionsDir(real), { recursive: true });
+		fs.symlinkSync(real, link, "dir");
+
+		expect(hasProjectSessionStore(link, storage)).toBe(true);
+		expect(defaultSessionDirForCwd(link, storage)).toBe(path.join(real, ".omp", "sessions", "project"));
 	});
 });

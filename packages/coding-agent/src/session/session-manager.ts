@@ -3123,21 +3123,35 @@ export class SessionManager {
 	}
 
 	/**
-	 * List sessions for a project directory.
-	 * @param sessionDir Optional dir; defaults to the cwd-derived dir.
+	 * List sessions for a project directory, pinned sessions first.
+	 *
+	 * @param sessionDir Optional dir; defaults to every default root for `cwd`.
+	 * @param agentDir Optional agent directory scoping the global sessions root.
+	 *   Pass the same value used with {@link SessionManager.getDefaultSessionDir}
+	 *   when an embedder keeps its own agent directory, otherwise the listing
+	 *   resolves the global root from the process-wide agent dir.
 	 */
 	static async list(
 		cwd: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
+		agentDir?: string,
 	): Promise<SessionInfo[]> {
-		const sessions = await listSessionsForCwd(cwd, storage, sessionDir);
+		const sessions = await listSessionsForCwd(cwd, storage, sessionDir, agentDir);
 		return sortPinnedFirst(sessions, await loadPinnedSessionIds());
 	}
 
-	/** List all sessions across all project directories, pinned sessions first. */
-	static async listAll(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
-		const sessions = await listAllSessions(storage);
+	/**
+	 * List sessions across every project bucket of the sessions roots visible
+	 * from `cwd`, pinned sessions first. Other projects' in-repo `.omp/sessions`
+	 * stores are not indexed anywhere, so they are not included.
+	 */
+	static async listAll(
+		storage: SessionStorage = new FileSessionStorage(),
+		cwd: string = getProjectDir(),
+		agentDir?: string,
+	): Promise<SessionInfo[]> {
+		const sessions = await listAllSessions(storage, undefined, cwd, agentDir);
 		return sortPinnedFirst(sessions, await loadPinnedSessionIds());
 	}
 }

@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { getProjectDir, logger, parseJsonlLenient, toError } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
-import { isDefaultSessionDir, sessionDirsForCwd, sessionRootsForCwd } from "./session-paths";
+import { sessionDirsForListing, sessionRootsForCwd } from "./session-paths";
 import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
 import { lookupSessionTitle, recordSessionTitle } from "./title-index";
 
@@ -624,38 +624,42 @@ export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage
 }
 
 /**
- * List sessions for a cwd across every default root (project-local store first,
- * then the global store), newest first.
+ * List sessions for a cwd across the roots that apply to it (project-local store
+ * and global store), newest first.
  *
- * `sessionDir` is honored verbatim when it is a caller-owned custom directory
- * (SDK storages, `--session-dir`); when it is one of the directories omp would
- * have chosen itself, the listing widens to all of them so in-repo and global
- * sessions for the same project appear together.
+ * `sessionDir` pins the primary directory; see {@link sessionDirsForListing} for
+ * which sibling root, if any, is scanned alongside it. `agentDir` scopes the
+ * global root for callers that keep their own agent directory (SDK embedders
+ * isolating tenants); it defaults to the process-wide agent dir.
  */
 export async function listSessionsForCwd(
 	cwd: string,
 	storage: SessionStorage = new FileSessionStorage(),
 	sessionDir?: string,
+	agentDir?: string,
 ): Promise<SessionInfo[]> {
-	if (sessionDir && !isDefaultSessionDir(cwd, sessionDir)) {
-		return await listSessions(sessionDir, storage);
-	}
-	const dirs = sessionDirsForCwd(cwd, storage);
+	const dirs = sessionDirsForListing(cwd, storage, sessionDir, agentDir);
 	if (dirs.length === 1) return await listSessions(dirs[0]!, storage);
 	const perDir = await Promise.all(dirs.map(dir => listSessions(dir, storage)));
 	return dedupeSessionsByPath(perDir.flat());
 }
 
 /**
- * List all sessions across all project directories (newest first). Scans every
- * sessions root visible from `cwd` unless a single root is pinned explicitly.
+ * List sessions across every project bucket of every sessions root visible from
+ * `cwd` (newest first): the global root for `agentDir`, plus `cwd`'s in-repo
+ * store when it has one. Other projects' in-repo stores are not discoverable —
+ * nothing indexes them — so a project that adopts a local store keeps its newer
+ * sessions out of this cross-project view.
+ *
+ * `sessionsRoot` pins a single root and skips that resolution entirely.
  */
 export async function listAllSessions(
 	storage: SessionStorage = new FileSessionStorage(),
 	sessionsRoot?: string,
 	cwd: string = getProjectDir(),
+	agentDir?: string,
 ): Promise<SessionInfo[]> {
-	const roots = sessionsRoot ? [sessionsRoot] : sessionRootsForCwd(cwd, storage).map(entry => entry.root);
+	const roots = sessionsRoot ? [sessionsRoot] : sessionRootsForCwd(cwd, storage, agentDir).map(entry => entry.root);
 	const perRoot = await Promise.all(roots.map(root => scanSessionsRoot(root, storage)));
 	return dedupeSessionsByPath(perRoot.flat());
 }
@@ -780,6 +784,8 @@ function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): bool
 export interface ResolveResumableSessionOptions {
 	/** Search default global session buckets after the active/custom session directory misses. */
 	allowGlobalFallback?: boolean;
+	/** Agent directory whose global sessions root to search; defaults to the process-wide one. */
+	agentDir?: string;
 }
 
 function isSessionStorage(value: SessionStorage | ResolveResumableSessionOptions): value is SessionStorage {
@@ -795,7 +801,7 @@ export async function resolveResumableSession(
 ): Promise<ResolvedSessionMatch | undefined> {
 	const storage = isSessionStorage(storageOrOptions) ? storageOrOptions : new FileSessionStorage();
 	const resolvedOptions = isSessionStorage(storageOrOptions) ? options : storageOrOptions;
-	const localSessions = await listSessionsForCwd(cwd, storage, sessionDir);
+	const localSessions = await listSessionsForCwd(cwd, storage, sessionDir, resolvedOptions.agentDir);
 	const localMatch = localSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
 	if (localMatch) {
 		return { session: localMatch, scope: "local" };
@@ -805,7 +811,7 @@ export async function resolveResumableSession(
 		return undefined;
 	}
 
-	const globalSessions = await listAllSessions(storage, undefined, cwd);
+	const globalSessions = await listAllSessions(storage, undefined, cwd, resolvedOptions.agentDir);
 	const globalMatch = globalSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
 	if (!globalMatch) {
 		return undefined;

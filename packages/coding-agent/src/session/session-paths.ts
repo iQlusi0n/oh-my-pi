@@ -236,8 +236,19 @@ export interface SessionRoot {
 	scope: SessionRootScope;
 }
 
+/**
+ * Project sessions root for `cwd`, canonicalized the same way the global bucket
+ * names are (see {@link getDefaultSessionDirName}). Without this, a cwd reached
+ * through a symlink or a macOS `/private` alias would resolve to a different
+ * store path than the same directory reached by its real path, so an existing
+ * in-repo store would go unrecognized.
+ */
+function projectSessionsRootFor(cwd: string): string {
+	return getProjectSessionsDir(resolveEquivalentPath(path.resolve(cwd)));
+}
+
 export function isProjectSessionsRoot(cwd: string, sessionsRoot: string): boolean {
-	return path.resolve(sessionsRoot) === path.resolve(getProjectSessionsDir(path.resolve(cwd)));
+	return resolveEquivalentPath(sessionsRoot) === projectSessionsRootFor(cwd);
 }
 
 /**
@@ -245,7 +256,7 @@ export function isProjectSessionsRoot(cwd: string, sessionsRoot: string): boolea
  * switch: without it omp behaves exactly as it did before project roots existed.
  */
 export function hasProjectSessionStore(cwd: string, storage: SessionStorage): boolean {
-	return storage.existsSync(getProjectSessionsDir(path.resolve(cwd)));
+	return storage.existsSync(projectSessionsRootFor(cwd));
 }
 
 /**
@@ -256,7 +267,7 @@ export function hasProjectSessionStore(cwd: string, storage: SessionStorage): bo
 export function sessionRootsForCwd(cwd: string, storage: SessionStorage, agentDir?: string): SessionRoot[] {
 	const roots: SessionRoot[] = [];
 	if (hasProjectSessionStore(cwd, storage)) {
-		roots.push({ root: getProjectSessionsDir(path.resolve(cwd)), scope: "project" });
+		roots.push({ root: projectSessionsRootFor(cwd), scope: "project" });
 	}
 	roots.push({ root: getSessionsDir(agentDir), scope: "global" });
 	return roots;
@@ -286,21 +297,41 @@ export function sessionDirsForCwd(cwd: string, storage: SessionStorage, agentDir
 }
 
 /**
- * True when `sessionDir` is one of the directories omp would pick for `cwd` on
- * its own. Pure path math: callers use it to decide whether an explicitly passed
- * session directory is a managed default (safe to widen to every root) or a
- * caller-owned custom directory (must be honored verbatim).
+ * Directories a listing for `cwd` should scan.
+ *
+ * With no pinned `sessionDir` this is every default root for `cwd`. With one, the
+ * pinned directory is always scanned verbatim and at most one sibling is added:
+ *
+ * - a pinned global bucket (under any agent dir, including a caller-specific one)
+ *   pairs with the project-local store, so in-repo sessions show up too;
+ * - the pinned project bucket pairs with the global bucket of `agentDir`, so
+ *   sessions recorded before `omp init` stay reachable;
+ * - a caller-owned directory (SDK storages, `--session-dir`) is scanned alone.
+ *
+ * The sibling is never guessed from the process default when the pinned directory
+ * identifies a root of its own: doing so would surface another agent dir's
+ * sessions to a caller scoped to its own `agentDir`.
  */
-export function isDefaultSessionDir(cwd: string, sessionDir: string, agentDir?: string): boolean {
-	const resolved = path.resolve(sessionDir);
-	const resolvedCwd = path.resolve(cwd);
-	if (resolved === path.join(getProjectSessionsDir(resolvedCwd), PROJECT_SESSION_BUCKET)) return true;
-	const { encodedDirName } = getDefaultSessionDirName(resolvedCwd);
-	const globalRoot = getSessionsDir(agentDir);
-	return (
-		resolved === path.join(globalRoot, encodedDirName) ||
-		resolved === path.join(globalRoot, encodeLegacyAbsoluteSessionDirName(resolvedCwd))
-	);
+export function sessionDirsForListing(
+	cwd: string,
+	storage: SessionStorage,
+	sessionDir?: string,
+	agentDir?: string,
+): string[] {
+	if (!sessionDir) return sessionDirsForCwd(cwd, storage, agentDir);
+	const pinned = path.resolve(sessionDir);
+	const dirs = [pinned];
+	const pinnedGlobalRoot = resolveManagedSessionRoot(pinned, cwd);
+	if (pinnedGlobalRoot) {
+		if (hasProjectSessionStore(cwd, storage)) {
+			dirs.push(computeDefaultSessionDir(cwd, storage, projectSessionsRootFor(cwd)));
+		}
+		return dirs;
+	}
+	if (pinned === path.join(projectSessionsRootFor(cwd), PROJECT_SESSION_BUCKET)) {
+		dirs.push(computeDefaultSessionDir(cwd, storage, getSessionsDir(agentDir)));
+	}
+	return dirs;
 }
 
 // =============================================================================
